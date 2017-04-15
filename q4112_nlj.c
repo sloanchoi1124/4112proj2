@@ -44,8 +44,6 @@ void* q4112_run_thread(void* arg) {
       if (inner_keys[i] == outer_keys[o]) {
         sum += inner_vals[i] * (uint64_t) outer_vals[o];
         count += 1;
-        // single match guaranteed (join on primary key)
-        break;
       }
     }
   }
@@ -67,7 +65,9 @@ uint64_t q4112_run(
   int t, max_threads = sysconf(_SC_NPROCESSORS_ONLN);
   assert(max_threads > 0 && threads > 0 && threads <= max_threads);
   // run threads
-  q4112_run_info_t info[threads];
+  q4112_run_info_t* info = (q4112_run_info_t*)
+      malloc(threads * sizeof(q4112_run_info_t));
+  assert(info != NULL);
   for (t = 0; t != threads; ++t) {
     info[t].thread = t;
     info[t].threads = threads;
@@ -87,5 +87,6 @@ uint64_t q4112_run(
     sum += info[t].sum;
     count += info[t].count;
   }
+  free(info);
   return sum / count;
 }
