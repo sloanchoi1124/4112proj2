@@ -15,13 +15,13 @@ typedef struct {
 	int threads;
 	size_t outer_tuples;
 	const uint32_t* outer_keys;
-	const unit32_t* outer_vals;
+	const uint32_t* outer_vals;
 	uint64_t sum;
 	uint32_t count;
 	bucket_t* table;
 	int8_t log_buckets;
 	size_t buckets;
-}q4112_run_info_t;
+} q4112_run_info_t;
 
 typedef struct {
 	pthread_t id;
@@ -33,10 +33,10 @@ typedef struct {
 	bucket_t* table;
 	int8_t log_buckets;
 	size_t buckets;
-} table_builder_info;
+} table_builder_info_t;
 
 void* table_builder_thread(void *arg) {
-	table_builder_info* info = (table_builder_info*)arg;
+	table_builder_info_t* info = (table_builder_info*)arg;
 	assert(pthread_equal(pthread_self(), info->id));
 
 	//copy info
@@ -46,7 +46,7 @@ void* table_builder_thread(void *arg) {
 	const uint32_t* inner_keys = info->inner_keys;
 	const uint32_t* inner_vals = info->inner_vals;
 	bucket_t* table = info->table;
-	int8_t log_buckets = into->log_buckets;
+	int8_t log_buckets = info->log_buckets;
 	size_t buckets = info->buckets;
 
 	//thread boundaries for inner table
@@ -63,8 +63,8 @@ void* table_builder_thread(void *arg) {
 		//calculate hash value
 		h = (uint32_t) (key * 0x9e3779b1);
 		h >>= 32 - log_buckets;
-		
-		while (!__sync_bool_compare_and_swap(&table[h], 0, key)) {
+		//TODO: figure out the type of table[h]
+		while (!__sync_bool_compare_and_swap(&table[h].key, 0, key)) {
 			h = (h + 1) & (buckets - 1);
 		}
 		table[h].val = val;
@@ -129,9 +129,29 @@ uint64_t q4112_run(const uint32_t* inner_keys, const uint32_t* inner_vals,
 	}
 	bucket_t* table = (bucket_t*) calloc(buckets, sizeof(bucket_t));
 	assert(table != NULL);
+	//TODO: create some threads;
+	table_builder_info_t* builder_info = (table_builder_info_t*)
+		malloc(threads * sizeof(table_builder_info_t));
+	assert(info != NULL);
+	for (t = 0; t != threads; ++t) {
+		builder_info[t].thread = t;
+		builder_info[t].threads = threads;
+		builder_info[t].inner_tuples = inner_tuples;
+		builder_info[t].inner_keys = inner_keys;
+		builder_info[t].inner_vals = inner_vals;
+		builder_info[t].table = table;
+		builder_info[t].log_buckets = log_buckets;
+		builder_info[t].buckets = buckets;
+		pthread_create(&builder_info[t].id, NULL, table_builder_thread, 
+			       &builder_info[t]);
+	}
+	for (t = 0; t != threads; ++t) {
+		pthread_join(builder_info[t].id, NULL);
+	}
+	free(builder_info);
+	return 1;
 	//TODO: fill in the hash table with multiple threads
 	//TODO: join using multiple threads
-	//gather results
-	
+	//gather results	
 
 }
