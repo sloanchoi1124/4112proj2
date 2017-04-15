@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <unistd.h>
-
+#include <stdio.h>
 typedef struct {
 	uint32_t key;
 	uint32_t val;
@@ -36,7 +36,7 @@ typedef struct {
 } table_builder_info_t;
 
 void* table_builder_thread(void *arg) {
-	table_builder_info_t* info = (table_builder_info*)arg;
+	table_builder_info_t* info = (table_builder_info_t*)arg;
 	assert(pthread_equal(pthread_self(), info->id));
 
 	//copy info
@@ -90,7 +90,7 @@ void* q4112_run_thread(void *arg) {
 		outer_end = outer_tuples;
 
 	//do hash join here
-	size_t i, o, h;
+	size_t o, h;
 	uint32_t count = 0;
 	uint64_t sum = 0;
 	for (o = outer_beg; o != outer_end; ++o) {
@@ -132,7 +132,7 @@ uint64_t q4112_run(const uint32_t* inner_keys, const uint32_t* inner_vals,
 	//TODO: create some threads;
 	table_builder_info_t* builder_info = (table_builder_info_t*)
 		malloc(threads * sizeof(table_builder_info_t));
-	assert(info != NULL);
+	assert(builder_info != NULL);
 	for (t = 0; t != threads; ++t) {
 		builder_info[t].thread = t;
 		builder_info[t].threads = threads;
@@ -149,9 +149,29 @@ uint64_t q4112_run(const uint32_t* inner_keys, const uint32_t* inner_vals,
 		pthread_join(builder_info[t].id, NULL);
 	}
 	free(builder_info);
-	return 1;
-	//TODO: fill in the hash table with multiple threads
-	//TODO: join using multiple threads
-	//gather results	
+	
+	q4112_run_info_t* info = (q4112_run_info_t*) 
+		malloc(threads * sizeof(q4112_run_info_t));
+	assert(info != NULL);
+	for (t = 0; t != threads; ++t) {
+		info[t].thread = t;
+		info[t].threads = threads;
+		info[t].outer_tuples = outer_tuples;
+		info[t].outer_keys = outer_join_keys;
+		info[t].outer_vals = outer_vals;
+		info[t].table = table;
+		info[t].log_buckets = log_buckets;
+		info[t].buckets = buckets;
+		pthread_create(&info[t].id, NULL, q4112_run_thread, &info[t]);
+	}
+	uint64_t sum = 0;
+	uint32_t count = 0;
+	for (t = 0; t != threads; ++t) {
+		pthread_join(info[t].id, NULL);
+		sum += info[t].sum;
+		count += info[t].count;
+	}
+	free(info);
+	return sum / count;
 
 }
