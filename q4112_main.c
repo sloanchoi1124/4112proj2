@@ -72,6 +72,7 @@ int main(int argc, char* argv[]) {
   }
   uint32_t* outer_vals = (uint32_t*) malloc(outer_tuples * 4);
   assert(outer_vals != NULL);
+  /*
   // print max number of threads
   fprintf(stderr, "Threads: %d / %d\n", threads, max_threads);
   fprintf(stderr, "Inner tuples: %13s\n", add_commas(inner_tuples));
@@ -84,23 +85,32 @@ int main(int argc, char* argv[]) {
   fprintf(stderr, "Groups (HH):  %13s\n", add_commas(hh_groups));
   fprintf(stderr, "HH probability: %5.1f%%\n", hh_probability * 100);
   // generate data and get correct result
+  */
   uint64_t gen_ns = real_time();
   uint64_t gen_res = q4112_gen(inner_keys, inner_vals, inner_tuples,
       inner_selectivity, inner_val_max,
       outer_join_keys, outer_aggr_keys, outer_vals, outer_tuples,
       outer_selectivity, outer_val_max, groups, hh_groups, hh_probability);
   gen_ns = real_time() - gen_ns;
+  /*
   fprintf(stderr, "Query input generated!\n");
   fprintf(stderr, "Generation time: %12s ns\n", add_commas(gen_ns));
   fprintf(stderr, "Query result: %llu\n", (unsigned long long) gen_res);
+  */
   // run join using specified number of threads
   uint64_t run_ns = real_time();
   uint64_t run_res = q4112_run(inner_keys, inner_vals, inner_tuples,
       outer_join_keys, outer_aggr_keys, outer_vals, outer_tuples, threads);
   run_ns = real_time() - run_ns;
+  /*
   fprintf(stderr, "Query executed!\n");
+
   fprintf(stderr, "Execution time:  %12s ns\n", add_commas(run_ns));
+
   fprintf(stderr, "Query result: %llu\n", (unsigned long long) run_res);
+ */
+
+  fprintf(stderr, "%12s ns\n", add_commas(run_ns));
   // validate result and cleanup memory
   assert(gen_res == run_res);
   free(inner_keys);
