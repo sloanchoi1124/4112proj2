@@ -145,6 +145,7 @@ uint64_t q4112_run(const uint32_t *inner_keys, const uint32_t *inner_vals,
 	}
 	uint64_t sum = 0;
 	uint32_t count = 0;
+	/*aggregate result*/
 	for (t = 0; t != threads; ++t) {
 		pthread_join(info[t].id, NULL);
 		sum += info[t].sum;
