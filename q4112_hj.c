@@ -6,13 +6,21 @@
 #include <stdio.h>
 
 #define BIG_NUMBER 0x9e3779b1
-pthread_barrier_t mybarrier;
+pthread_barrier_t inner_table_barrier;
+pthread_barrier_t global_hash_barrier;
+typedef struct {
+	uint32_t aggr_key;
+	uint32_t sum;
+	uint32_t count;
+
+} aggr_bucket_t;
 
 typedef struct {
 	uint32_t key;
 	uint32_t val;
 } bucket_t;
 
+//TODO: pack more stuff in thread_info_t
 typedef struct {
 	pthread_t id;
 	int thread;
@@ -23,7 +31,11 @@ typedef struct {
 	const uint32_t *inner_vals;
 	const uint32_t *outer_keys;
 	const uint32_t *outer_vals;
+	const uint32_t *outer_aggr_keys;
 	bucket_t *table;
+	aggr_bucket_t *global_table;
+	uint32_t *bitmaps;
+	size_t groups;
 	int8_t log_buckets;
 	size_t buckets;
 	uint64_t sum;
@@ -49,6 +61,10 @@ void *worker_thread(void *arg)
 	const uint32_t *outer_keys = info->outer_keys;
 	const uint32_t *outer_vals = info->outer_vals;
 
+	const uint32_t *aggr_keys = info->outer_aggr_keys;
+	aggr_bucket_t *global_table = info->global_table;
+	uint32_t *bitmaps = info->bitmaps;
+
 	/*thread boundaries for inner table*/
 	size_t inner_beg = (inner_tuples / threads) * (thread + 0);
 	size_t inner_end = (inner_tuples / threads) * (thread + 1);
@@ -69,16 +85,32 @@ void *worker_thread(void *arg)
 	}
 
 	/*wait for other worker threads to complete building hash table*/
-	pthread_barrier_wait(&mybarrier);
+	pthread_barrier_wait(&inner_table_barrier);
 
+	
 	/*thread boundaries for outer table*/
 	size_t outer_beg = (outer_tuples / threads) * (thread + 0);
 	size_t outer_end = (outer_tuples / threads) * (thread + 1);
 	if (thread + 1 == threads)
 		outer_end = outer_tuples;
 
-	/*do hash join here*/
+
+	//TODO: do unique group estimation here
 	size_t o;
+	uint32_t hash_val;
+	for (o = outer_beg; o != outer_end; ++o) {
+		uint32_t key = aggr_keys[0];
+		hash_val = (uint32_t) (key * BIG_NUMBER);
+		bitmaps[thread] |= hash_val & -hash_val;
+	}
+
+	/*wait until all worker threads finish */
+	pthread_barrier_wait(&global_hash_barrier);
+	if (thread == 0) {
+		printf("===DEBUG==INFO\n");
+	}
+	/*do hash join here*/
+	o = 0;
 	uint32_t count = 0;
 	uint64_t sum = 0;
 	for (o = outer_beg; o != outer_end; ++o) {
@@ -119,14 +151,27 @@ uint64_t q4112_run(const uint32_t *inner_keys, const uint32_t *inner_vals,
 	bucket_t *table = (bucket_t *) calloc(buckets, sizeof(bucket_t));
 	assert(table != NULL);
 
+	//allocate an array of bitmaps
+	uint32_t *bitmaps = (uint32_t *) calloc(threads, sizeof(uint32_t));
+	assert (bitmaps != NULL);
 
-	pthread_barrier_init(&mybarrier, NULL, threads);
+
+	//create global hash table;
+	aggr_bucket_t *global_table = NULL;
+
+	pthread_barrier_init(&inner_table_barrier, NULL, threads);
+	pthread_barrier_init(&global_hash_barrier, NULL, threads);
+	//TODO: maybe initiate more barriers;
+	
 	/*create worker threads;*/
-
 	thread_info_t *info = (thread_info_t *)
 		malloc(threads * sizeof(thread_info_t));
 	assert(info != NULL);
 	for (t = 0; t != threads; ++t) {
+		info[t].outer_aggr_keys = outer_aggr_keys;
+		info[t].bitmaps = bitmaps;
+		info[t].global_table = global_table;
+		info[t].groups = 0;
 		info[t].thread = t;
 		info[t].threads = threads;
 		info[t].inner_tuples = inner_tuples;
