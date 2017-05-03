@@ -96,21 +96,20 @@ void *worker_thread(void *arg)
 
 
 	//TODO: do unique group estimation here
-	size_t o;
+	size_t j;
 	uint32_t hash_val;
-	for (o = outer_beg; o != outer_end; ++o) {
-		uint32_t key = aggr_keys[0];
+	printf("===DEBUG INFO=== %lu\n", sizeof(bitmaps)/sizeof(uint32_t));
+	for (j = outer_beg; j != outer_end; ++j) {
+		uint32_t key = aggr_keys[j];
 		hash_val = (uint32_t) (key * BIG_NUMBER);
-		bitmaps[thread] |= hash_val & -hash_val;
+		//*(bitmaps + thread) |= hash_val & -hash_val;
 	}
-
-	/*wait until all worker threads finish */
+/*
+	//wait until all worker threads finish
 	pthread_barrier_wait(&global_hash_barrier);
-	if (thread == 0) {
-		printf("===DEBUG==INFO\n");
-	}
-	/*do hash join here*/
-	o = 0;
+	//do hash join here
+*/
+	size_t o = 0;
 	uint32_t count = 0;
 	uint64_t sum = 0;
 	for (o = outer_beg; o != outer_end; ++o) {
@@ -152,9 +151,8 @@ uint64_t q4112_run(const uint32_t *inner_keys, const uint32_t *inner_vals,
 	assert(table != NULL);
 
 	//allocate an array of bitmaps
-	uint32_t *bitmaps = (uint32_t *) calloc(threads, sizeof(uint32_t));
-	assert (bitmaps != NULL);
-
+	uint32_t *bitmaps = (uint32_t *)calloc(threads, sizeof(uint32_t));
+	assert(bitmaps != NULL);
 
 	//create global hash table;
 	aggr_bucket_t *global_table = NULL;
