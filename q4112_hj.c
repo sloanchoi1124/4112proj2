@@ -65,18 +65,22 @@ void *worker_thread(void *arg)
 	aggr_bucket_t *global_table = info->global_table;
 	uint32_t *bitmaps = info->bitmaps;
 
-	/*thread boundaries for inner table*/
+	int i;
+	for(i = 0; i < 16; i++)
+		printf("===debug %u", bitmaps[i]);
+	/*
+	//thread boundaries for inner table
 	size_t inner_beg = (inner_tuples / threads) * (thread + 0);
 	size_t inner_end = (inner_tuples / threads) * (thread + 1);
 	if (thread + 1 == threads)
 		inner_end = inner_tuples;
 
-	/*build hash table*/
+	//build hash table
 	size_t i, h;
 	for (i = inner_beg; i != inner_end; ++i) {
 		uint32_t key = inner_keys[i];
 		uint32_t val = inner_vals[i];
-		/*calculate hash value*/
+		//calculate hash value
 		h = (uint32_t) (key * BIG_NUMBER);
 		h >>= 32 - log_buckets;
 		while (!__sync_bool_compare_and_swap(&table[h].key, 0, key))
@@ -84,11 +88,11 @@ void *worker_thread(void *arg)
 		table[h].val = val;
 	}
 
-	/*wait for other worker threads to complete building hash table*/
+	//wait for other worker threads to complete building hash table
 	pthread_barrier_wait(&inner_table_barrier);
 
 	
-	/*thread boundaries for outer table*/
+	//thread boundaries for outer table
 	size_t outer_beg = (outer_tuples / threads) * (thread + 0);
 	size_t outer_end = (outer_tuples / threads) * (thread + 1);
 	if (thread + 1 == threads)
@@ -102,13 +106,13 @@ void *worker_thread(void *arg)
 	for (j = outer_beg; j != outer_end; ++j) {
 		uint32_t key = aggr_keys[j];
 		hash_val = (uint32_t) (key * BIG_NUMBER);
-		//*(bitmaps + thread) |= hash_val & -hash_val;
+		//(bitmaps + thread) |= hash_val & -hash_val;
 	}
-/*
+
 	//wait until all worker threads finish
-	pthread_barrier_wait(&global_hash_barrier);
+	//pthread_barrier_wait(&global_hash_barrier);
 	//do hash join here
-*/
+
 	size_t o = 0;
 	uint32_t count = 0;
 	uint64_t sum = 0;
@@ -130,6 +134,7 @@ void *worker_thread(void *arg)
 	}
 	info->sum = sum;
 	info->count = count;
+	*/
 	pthread_exit(NULL);
 }
 
@@ -151,8 +156,10 @@ uint64_t q4112_run(const uint32_t *inner_keys, const uint32_t *inner_vals,
 	assert(table != NULL);
 
 	//allocate an array of bitmaps
-	uint32_t *bitmaps = (uint32_t *)calloc(threads, sizeof(uint32_t));
+	uint32_t *bitmaps = (uint32_t *)calloc(16, sizeof(uint32_t));
 	assert(bitmaps != NULL);
+	for (t = 0; t != 16; ++t)
+		bitmaps[t] = t;
 
 	//create global hash table;
 	aggr_bucket_t *global_table = NULL;
