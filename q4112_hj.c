@@ -61,14 +61,10 @@ void *worker_thread(void *arg)
 	const uint32_t *outer_keys = info->outer_keys;
 	const uint32_t *outer_vals = info->outer_vals;
 
-	const uint32_t *aggr_keys = info->outer_aggr_keys;
-	aggr_bucket_t *global_table = info->global_table;
-	uint32_t *bitmaps = info->bitmaps;
+	const uint32_t *outer_aggr_keys = info->outer_aggr_keys;
+	//aggr_bucket_t *global_table = info->global_table;
 
-	int i;
-	for(i = 0; i < 16; i++)
-		printf("===debug %u", bitmaps[i]);
-	/*
+	
 	//thread boundaries for inner table
 	size_t inner_beg = (inner_tuples / threads) * (thread + 0);
 	size_t inner_end = (inner_tuples / threads) * (thread + 1);
@@ -102,15 +98,28 @@ void *worker_thread(void *arg)
 	//TODO: do unique group estimation here
 	size_t j;
 	uint32_t hash_val;
-	printf("===DEBUG INFO=== %lu\n", sizeof(bitmaps)/sizeof(uint32_t));
+	uint32_t my_bitmap = 0;
+	
 	for (j = outer_beg; j != outer_end; ++j) {
-		uint32_t key = aggr_keys[j];
+		uint32_t key = outer_aggr_keys[j];
 		hash_val = (uint32_t) (key * BIG_NUMBER);
-		//(bitmaps + thread) |= hash_val & -hash_val;
+		my_bitmap |= hash_val & (-hash_val);
+	}
+	
+	//copy bitmap to global
+	info->bitmaps[thread] = my_bitmap;
+	pthread_barrier_wait(&global_hash_barrier);
+	int estimation = 0;
+	if (thread == 0) {
+	    int i;
+	    for (i = 0; i < threads; ++i)
+		printf("%u\n", info->bitmaps[i]);
+
+	    //TODO: calculate estimation!!!
+	    //allocate space for global hash table!
 	}
 
-	//wait until all worker threads finish
-	//pthread_barrier_wait(&global_hash_barrier);
+	//set another barrier here!
 	//do hash join here
 
 	size_t o = 0;
@@ -134,7 +143,7 @@ void *worker_thread(void *arg)
 	}
 	info->sum = sum;
 	info->count = count;
-	*/
+	
 	pthread_exit(NULL);
 }
 
@@ -158,8 +167,6 @@ uint64_t q4112_run(const uint32_t *inner_keys, const uint32_t *inner_vals,
 	//allocate an array of bitmaps
 	uint32_t *bitmaps = (uint32_t *)calloc(16, sizeof(uint32_t));
 	assert(bitmaps != NULL);
-	for (t = 0; t != 16; ++t)
-		bitmaps[t] = t;
 
 	//create global hash table;
 	aggr_bucket_t *global_table = NULL;
@@ -201,6 +208,7 @@ uint64_t q4112_run(const uint32_t *inner_keys, const uint32_t *inner_vals,
 		sum += info[t].sum;
 		count += info[t].count;
 	}
+	free(bitmaps);
 	free(info);
 	free(table);
 	return sum / count;
