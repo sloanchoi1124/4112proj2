@@ -15,8 +15,11 @@ typedef struct {
 
 pthread_barrier_t inner_table_barrier;
 pthread_barrier_t global_hash_barrier;
-pthread_barrier_t gloable_table_creation_complete;
+pthread_barrier_t gloable_table_creation;
+pthread_barrier_t aggr_table_complete;
 aggr_bucket_t *global_table = NULL;
+int8_t log_global_buckets = 0;
+size_t global_buckets = 0;
 
 typedef struct {
 	uint32_t key;
@@ -44,6 +47,7 @@ typedef struct {
 	uint64_t sum;
 	uint32_t count;
 } thread_info_t;
+
 uint32_t trailing_zero_count(uint32_t num)
 {
     uint32_t i = num;
@@ -58,6 +62,21 @@ uint32_t trailing_zero_count(uint32_t num)
     }
     return count;
 
+}
+
+int8_t log_two(size_t input)
+{
+	int8_t result = 0;
+	size_t x = input;
+	while (x > 0) {
+		if(x == 1)
+			break;
+		else {
+			result ++;
+			x /= 2;
+		}
+	}
+	return result;
 }
 void *worker_thread(void *arg)
 {
@@ -101,18 +120,14 @@ void *worker_thread(void *arg)
 		table[h].val = val;
 	}
 
-	//wait for other worker threads to complete building hash table
+	//estimate unique groups
 	pthread_barrier_wait(&inner_table_barrier);
-
-	
 	//thread boundaries for outer table
 	size_t outer_beg = (outer_tuples / threads) * (thread + 0);
 	size_t outer_end = (outer_tuples / threads) * (thread + 1);
 	if (thread + 1 == threads)
 		outer_end = outer_tuples;
 
-
-	//TODO: do unique group estimation here
 	size_t j;
 	uint32_t hash_val;
 	uint32_t my_bitmap = 0;
@@ -123,31 +138,53 @@ void *worker_thread(void *arg)
 		my_bitmap |= hash_val & (-hash_val);
 	}
 	
-	//copy bitmap to global
 	info->bitmaps[thread] = my_bitmap;
+	
 	pthread_barrier_wait(&global_hash_barrier);
-	int estimation = 0;
-	uint32_t merged_bitmap = 0;
-	if (global_table == NULL)
-	    printf("===DEBUG=== this shoud be correct!\n");
 
 	if (thread == 0) {
-	    int i;
-	    for (i = 0; i < threads; ++i)
-		merged_bitmap |= info->bitmaps[i];
-	    estimation = (((size_t) 1) << trailing_zero_count(~merged_bitmap)) / 0.77351;
-	    printf("DEBUG ==== estimation = %d\n", estimation);
-	    global_table = (aggr_bucket_t *)calloc(estimation, sizeof(aggr_bucket_t));
+		int estimation = 0;
+		uint32_t merged_bitmap = 0;
+		int i;
+		for (i = 0; i < threads; ++i)
+			merged_bitmap |= info->bitmaps[i];
+		
+		estimation = (((size_t) 1) 
+			      << trailing_zero_count(~merged_bitmap)) / 0.77351;
+		
+		printf("DEBUG ==== estimation = %d\n", estimation);
+		global_table = (aggr_bucket_t *) 
+			calloc(estimation / 0.67, sizeof(aggr_bucket_t));
+		global_buckets = estimation / 0.67;
+		log_global_buckets = log_two(global_buckets);
 	}
 	
-	//another barrier
-	pthread_barrier_wait(&gloable_table_creation_complete);
+	//initialize global hash table
+	pthread_barrier_wait(&gloable_table_creation);
 	printf("===DEBUG=== global hash table created!\n");
 	if (global_table == NULL)
-	    printf("===FATAL\n");
-	//set another barrier here!
-	//do hash join here
+		printf("===FATAL\n");
 
+	for (j = outer_beg; j != outer_end; ++j) {
+		uint32_t key = outer_aggr_keys[j];
+		h = (uint32_t) (key * BIG_NUMBER);
+		h >>= 32 - log_global_buckets;
+		while (!__sync_bool_compare_and_swap(&global_table[h].aggr_key, 
+						     0, 
+						     key)){
+			//do not insert duplicate keys
+			if (global_table[h].aggr_key == key)
+				break;
+			h = (h + 1) & (global_buckets - 1);
+		}
+
+		global_table[h].sum = 0;
+		global_table[h].count = 0;
+
+	}
+	
+	// do join and aggregation!
+	pthread_barrier_wait(&aggr_table_complete);
 	size_t o = 0;
 	uint32_t count = 0;
 	uint64_t sum = 0;
@@ -199,8 +236,8 @@ uint64_t q4112_run(const uint32_t *inner_keys, const uint32_t *inner_vals,
 
 	pthread_barrier_init(&inner_table_barrier, NULL, threads);
 	pthread_barrier_init(&global_hash_barrier, NULL, threads);
-	pthread_barrier_init(&gloable_table_creation_complete, NULL, threads);
-	//TODO: maybe initiate more barriers;
+	pthread_barrier_init(&gloable_table_creation, NULL, threads);
+	pthread_barrier_init(&aggr_table_complete, NULL, threads);		
 	
 	/*create worker threads;*/
 	thread_info_t *info = (thread_info_t *)
