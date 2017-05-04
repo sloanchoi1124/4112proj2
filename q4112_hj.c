@@ -8,15 +8,15 @@
 #define BIG_NUMBER 0x9e3779b1
 typedef struct {
 	uint32_t aggr_key;
-	uint32_t sum;
+	uint64_t sum;
 	uint32_t count;
 
 } aggr_bucket_t;
 
 pthread_barrier_t inner_table_barrier;
 pthread_barrier_t global_hash_barrier;
-pthread_barrier_t gloable_table_creation;
-pthread_barrier_t aggr_table_complete;
+pthread_barrier_t global_table_creation;
+pthread_barrier_t aggr_barrier;
 aggr_bucket_t *global_table = NULL;
 int8_t log_global_buckets = 0;
 size_t global_buckets = 0;
@@ -39,7 +39,6 @@ typedef struct {
 	const uint32_t *outer_vals;
 	const uint32_t *outer_aggr_keys;
 	bucket_t *table;
-	aggr_bucket_t *global_table;
 	uint32_t *bitmaps;
 	size_t groups;
 	int8_t log_buckets;
@@ -108,7 +107,7 @@ void *worker_thread(void *arg)
 		inner_end = inner_tuples;
 
 	//build hash table
-	size_t i, h;
+	size_t i, h, h_global;
 	for (i = inner_beg; i != inner_end; ++i) {
 		uint32_t key = inner_keys[i];
 		uint32_t val = inner_vals[i];
@@ -166,34 +165,18 @@ void *worker_thread(void *arg)
 		printf("====DEBUG======log_global_buckets %d\n", (int)log_global_buckets);
 		printf("====DEBUG======buckets %d\n", (int)buckets);
 		printf("====DEBUG======log_buckets %d\n", (int)log_buckets);
-	}
+		printf("====DEBUG==== key in global bucket %d\n", global_table[0].aggr_key);
 
-	//initialize global hash table
-	pthread_barrier_wait(&gloable_table_creation);
-	printf("===DEBUG=== global hash table created!\n");
-	if (global_table == NULL)
-		printf("===FATAL\n");
-
-	for (j = outer_beg; j != outer_end; ++j) {
-		uint32_t key = outer_aggr_keys[j];
-		h = (uint32_t) (key * BIG_NUMBER);
-		h >>= 32 - log_global_buckets;
-		while (!__sync_bool_compare_and_swap(&global_table[h].aggr_key, 
-						     0, 
-						     key)){
-			//do not insert duplicate keys
-			if (global_table[h].aggr_key == key)
-				break;
-			h = (h + 1) & (global_buckets - 1);
+		for (i = 0; i < global_buckets; ++i) {
+		    global_table[i].aggr_key = 0;
+		    global_table[i].sum = 0;
+		    global_table[i].count = 0;
 		}
-
-		global_table[h].sum = 0;
-		global_table[h].count = 0;
-
 	}
+
 	
 	// do join and aggregation!
-	pthread_barrier_wait(&aggr_table_complete);
+	pthread_barrier_wait(&global_table_creation);
 	size_t o = 0;
 	uint32_t count = 0;
 	uint64_t sum = 0;
@@ -205,17 +188,64 @@ void *worker_thread(void *arg)
 		uint32_t tab = table[h].key;
 		while (tab != 0) {
 			if (tab == key) {
-				sum += table[h].val * (uint64_t)outer_vals[o];
-				count += 1;
+			    	uint64_t extra = table[h].val * (uint64_t)outer_vals[o];
+				
+				//TODO: update aggregation table here!
+				uint32_t aggr_key = outer_aggr_keys[o];
+				//printf("DEBUG=== outer_aggr_key[%d]=%u\n", (int)o, aggr_key);
+				h_global = (uint32_t)(aggr_key * BIG_NUMBER);
+				h_global >>= 32 - log_global_buckets;
+
+
+				//printf("h_global=%u\n", (uint32_t)h_global);
+				
+				if (global_table[h_global].aggr_key == aggr_key) {
+				    //printf("===DEBUG=== line 204 jumps to increment_bucket label\n");
+				    goto increment_bucket;
+				}
+
+				while (!__sync_bool_compare_and_swap(&global_table[h_global].aggr_key, 0, aggr_key)) {
+				    if (global_table[h_global].aggr_key == aggr_key)
+					goto increment_bucket;
+				    h_global = (h_global + 1) & (global_buckets - 1);
+				}
+
+				//TODO: atomic-add count and sum
+increment_bucket:
+				__sync_fetch_and_add(&global_table[h_global].count, 1);
+				__sync_fetch_and_add(&global_table[h_global].sum, extra);
+				//printf("===DEBUG=== after incrementation global_table[%u].count = %u\n", (uint32_t)h_global, (uint32_t)global_table[h_global].count);
+				//printf("===DEBUG=== after incrementation global_table[%u].sum = %lu\n", (uint32_t)h_global, (uint64_t)global_table[h_global].sum);
 				break;
 			}
 			h = (h + 1) & (buckets - 1);
 			tab = table[h].key;
 		}
 	}
+
+	//TODO: create another barrier; wait until all threads finish joining the table
+	//loop though buckets in global table;
+	
+	pthread_barrier_wait(&aggr_barrier);
+	size_t aggr_beg = (global_buckets / threads) * (thread + 0);
+	size_t aggr_end = (global_buckets / threads) * (thread + 1);
+	if (thread + 1 == threads)
+	    aggr_end = global_buckets;
+	
+	for (j = aggr_beg; j != aggr_end; ++j) {
+	    if (global_table[j].aggr_key == 0 && global_table[j].count != 0)
+		printf("===BUG_ON=== fatal mistake! global_table incorrectly intilized!\n");
+	    if (global_table[j].count > 0 && global_table[j].aggr_key !=0) {
+		sum += global_table[j].sum / global_table[j].count;
+		count++;
+	    }
+	}
+	//TODO: average the aggregate here!
 	info->sum = sum;
 	info->count = count;
-	
+	//printf("debug sum=%d count = %d\n", (int)sum, (int)count);
+
+
 	pthread_exit(NULL);
 }
 
@@ -240,14 +270,10 @@ uint64_t q4112_run(const uint32_t *inner_keys, const uint32_t *inner_vals,
 	uint32_t *bitmaps = (uint32_t *)calloc(16, sizeof(uint32_t));
 	assert(bitmaps != NULL);
 
-	//create global hash table;
-	aggr_bucket_t *global_table = NULL;
-
 	pthread_barrier_init(&inner_table_barrier, NULL, threads);
 	pthread_barrier_init(&global_hash_barrier, NULL, threads);
-	pthread_barrier_init(&gloable_table_creation, NULL, threads);
-	pthread_barrier_init(&aggr_table_complete, NULL, threads);		
-	
+	pthread_barrier_init(&global_table_creation, NULL, threads);
+	pthread_barrier_init(&aggr_barrier, NULL, threads);
 	/*create worker threads;*/
 	thread_info_t *info = (thread_info_t *)
 		malloc(threads * sizeof(thread_info_t));
@@ -255,7 +281,6 @@ uint64_t q4112_run(const uint32_t *inner_keys, const uint32_t *inner_vals,
 	for (t = 0; t != threads; ++t) {
 		info[t].outer_aggr_keys = outer_aggr_keys;
 		info[t].bitmaps = bitmaps;
-		info[t].global_table = global_table;
 		info[t].groups = 0;
 		info[t].thread = t;
 		info[t].threads = threads;

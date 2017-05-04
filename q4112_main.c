@@ -96,19 +96,19 @@ int main(int argc, char* argv[]) {
   fprintf(stderr, "Query input generated!\n");
   fprintf(stderr, "Generation time: %12s ns\n", add_commas(gen_ns));
   fprintf(stderr, "Query result: %llu\n", (unsigned long long) gen_res);
-  */
+ */
   // run join using specified number of threads
   uint64_t run_ns = real_time();
   uint64_t run_res = q4112_run(inner_keys, inner_vals, inner_tuples,
       outer_join_keys, outer_aggr_keys, outer_vals, outer_tuples, threads);
   run_ns = real_time() - run_ns;
-  /*
-  fprintf(stderr, "Query executed!\n");
+  
+  //fprintf(stderr, "Query executed!\n");
 
   fprintf(stderr, "Execution time:  %12s ns\n", add_commas(run_ns));
 
   fprintf(stderr, "Query result: %llu\n", (unsigned long long) run_res);
- */
+
 
   fprintf(stderr, "%12s ns\n", add_commas(run_ns));
   // validate result and cleanup memory
