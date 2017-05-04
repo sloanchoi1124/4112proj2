@@ -156,9 +156,18 @@ void *worker_thread(void *arg)
 		global_table = (aggr_bucket_t *) 
 			calloc(estimation / 0.67, sizeof(aggr_bucket_t));
 		global_buckets = estimation / 0.67;
-		log_global_buckets = log_two(global_buckets);
+		log_global_buckets = log_two(global_buckets) + 1;
+		global_buckets = 1 << log_global_buckets;
+		
+		//debug only
+		log_global_buckets = 8;
+		global_buckets = 256;
+		printf("====DEBUG =====global_buckets %d\n", (int)global_buckets);
+		printf("====DEBUG======log_global_buckets %d\n", (int)log_global_buckets);
+		printf("====DEBUG======buckets %d\n", (int)buckets);
+		printf("====DEBUG======log_buckets %d\n", (int)log_buckets);
 	}
-	
+
 	//initialize global hash table
 	pthread_barrier_wait(&gloable_table_creation);
 	printf("===DEBUG=== global hash table created!\n");
