@@ -27,7 +27,7 @@ typedef struct {
 	uint32_t val;
 } bucket_t;
 
-//TODO: pack more stuff in thread_info_t
+/*TODO: pack more stuff in thread_info_t*/
 typedef struct {
 	pthread_t id;
 	int thread;
@@ -52,17 +52,17 @@ typedef struct {
 
 uint32_t trailing_zero_count(uint32_t num)
 {
-    uint32_t i = num;
-    uint32_t count = 0;
-    while (i != 0) {
-	if ((i & 1) == 1)
-	    return count;
-	else {
-	    count++;
-	    i = i >> 1;
+	uint32_t i = num;
+	uint32_t count = 0;
+	while (i != 0) {
+		if ((i & 1) == 1)
+			return count;
+		else {
+			count++;
+			i = i >> 1;
+		}
 	}
-    }
-    return count;
+	return count;
 
 }
 
@@ -71,10 +71,10 @@ int8_t log_two(size_t input)
 	int8_t result = 0;
 	size_t x = input;
 	while (x > 0) {
-		if(x == 1)
+		if (x == 1)
 			break;
 		else {
-			result ++;
+			result++;
 			x /= 2;
 		}
 	}
@@ -101,19 +101,17 @@ void *worker_thread(void *arg)
 	size_t partitions = info->partitions;
 	const int8_t log_partitions = info->log_partitions;
 
-	
-	//thread boundaries for inner table
+	/*thread boundaries for inner table*/
 	size_t inner_beg = (inner_tuples / threads) * (thread + 0);
 	size_t inner_end = (inner_tuples / threads) * (thread + 1);
 	if (thread + 1 == threads)
 		inner_end = inner_tuples;
 
-	//build hash table
-	size_t i, h, h_global;
+	/*build hash table*/
+	size_t i, h, h_glb;
 	for (i = inner_beg; i != inner_end; ++i) {
 		uint32_t key = inner_keys[i];
 		uint32_t val = inner_vals[i];
-		//calculate hash value
 		h = (uint32_t) (key * BIG_NUMBER);
 		h >>= 32 - log_buckets;
 		while (!__sync_bool_compare_and_swap(&table[h].key, 0, key))
@@ -121,9 +119,8 @@ void *worker_thread(void *arg)
 		table[h].val = val;
 	}
 
-	//estimate unique groups
+	/*estimate unique groups*/
 	pthread_barrier_wait(&inner_table_barrier);
-	//thread boundaries for outer table
 	size_t outer_beg = (outer_tuples / threads) * (thread + 0);
 	size_t outer_end = (outer_tuples / threads) * (thread + 1);
 	if (thread + 1 == threads)
@@ -133,48 +130,55 @@ void *worker_thread(void *arg)
 
 	uint32_t *bitmaps_multi_local = calloc(partitions, 4);
 	for (j = outer_beg; j != outer_end; ++j) {
-	    uint32_t h = (uint32_t)(outer_aggr_keys[j] * BIG_NUMBER);
-	    size_t p = h & (partitions - 1);
-	    h >>= log_partitions;
-	    bitmaps_multi_local[p] |= h & (-h);
+		uint32_t h = (uint32_t)(outer_aggr_keys[j] * BIG_NUMBER);
+		size_t p = h & (partitions - 1);
+		h >>= log_partitions;
+		bitmaps_multi_local[p] |= h & (-h);
 	}
+
 	int bitmaps_multi_beg = partitions * thread;
 	int bitmaps_multi_end = partitions * (thread + 1);
 	for (j = bitmaps_multi_beg; j != bitmaps_multi_end; ++j)
-	    info->bitmaps_multi[j] = bitmaps_multi_local[j % partitions];
+		info->bitmaps_multi[j] = bitmaps_multi_local[j % partitions];
 
-	free (bitmaps_multi_local);
+	free(bitmaps_multi_local);
 
 	pthread_barrier_wait(&global_hash_barrier);
 
 	if (thread == 0) {
-	    for (i = 0; i < partitions; ++i) {
-		for (j = 1; j < threads; ++j){ 
-		    info->bitmaps_multi[i] |= info->bitmaps_multi[i + j * partitions];
+		for (i = 0; i < partitions; ++i) {
+			for (j = 1; j < threads; ++j) {
+				info->bitmaps_multi[i] |=
+					info->bitmaps_multi[i + j * partitions];
+			}
 		}
-	    }
-	    int estimation = 0;
-	    for (i = 0; i < partitions; ++i)
-		estimation += ((size_t) 1) << trailing_zero_count(~info->bitmaps_multi[i]);
-	    estimation /= 0.77351;
-	    global_buckets = estimation / 0.67;
-	    log_global_buckets = log_two(global_buckets) + 1;
-	    global_buckets = 1 << log_global_buckets;
-	    //printf("DEBUG ==== estimation_with_partition = %d\n", estimation); 
-	    global_table = (aggr_bucket_t *) calloc(global_buckets, sizeof(aggr_bucket_t));
-	    
-	    //debug only
-	    //printf("====DEBUG =====global_buckets %d\n", (int)global_buckets);
-	    //printf("====DEBUG======log_global_buckets %d\n", (int)log_global_buckets);
-	    
-	    for (i = 0; i < global_buckets; ++i) {
-		global_table[i].aggr_key = 0;
-		global_table[i].sum = 0;
-		global_table[i].count = 0;
-	    }
+
+		int estimation = 0;
+		for (i = 0; i < partitions; ++i)
+			estimation += ((size_t) 1)
+				<< trailing_zero_count(~info->bitmaps_multi[i]);
+
+		estimation /= 0.77351;
+		global_buckets = estimation / 0.67;
+		log_global_buckets = log_two(global_buckets) + 1;
+		global_buckets = 1 << log_global_buckets;
+		global_table = (aggr_bucket_t *)
+			calloc(global_buckets, sizeof(aggr_bucket_t));
+
+		/*
+		 * DEBUG INFO
+		 * printf("DEBUG ==== estimation_with_partition = %d\n", estimation); 
+		 * printf("====DEBUG =====global_buckets %d\n", (int)global_buckets);
+		 * printf("====DEBUG======log_global_buckets %d\n", (int)log_global_buckets);
+		*/
+		for (i = 0; i < global_buckets; ++i) {
+			global_table[i].aggr_key = 0;
+			global_table[i].sum = 0;
+			global_table[i].count = 0;
+		}
 	}
 
-	// do join and aggregation!
+	/*join and aggregation*/
 	pthread_barrier_wait(&global_table_creation);
 	size_t o = 0;
 	uint32_t count = 0;
@@ -187,34 +191,39 @@ void *worker_thread(void *arg)
 		uint32_t tab = table[h].key;
 		while (tab != 0) {
 			if (tab == key) {
-			    	uint64_t extra = table[h].val * (uint64_t)outer_vals[o];
-				
-				//TODO: update aggregation table here!
+				uint64_t extra =
+					table[h].val * (uint64_t)outer_vals[o];	
 				uint32_t aggr_key = outer_aggr_keys[o];
-				//printf("DEBUG=== outer_aggr_key[%d]=%u\n", (int)o, aggr_key);
-				h_global = (uint32_t)(aggr_key * BIG_NUMBER);
-				h_global >>= 32 - log_global_buckets;
+				h_glb = (uint32_t) (aggr_key * BIG_NUMBER);
+				h_glb >>= 32 - log_global_buckets;
 
-
-				//printf("h_global=%u\n", (uint32_t)h_global);
-				
-				if (global_table[h_global].aggr_key == aggr_key) {
-				    //printf("===DEBUG=== line 204 jumps to increment_bucket label\n");
-				    goto increment_bucket;
-				}
-
-				while (!__sync_bool_compare_and_swap(&global_table[h_global].aggr_key, 0, aggr_key)) {
-				    if (global_table[h_global].aggr_key == aggr_key)
+				if (global_table[h_glb].aggr_key == aggr_key)
 					goto increment_bucket;
-				    h_global = (h_global + 1) & (global_buckets - 1);
+
+
+				while (!__sync_bool_compare_and_swap
+				       (&global_table[h_glb].aggr_key, 
+					0, 
+					aggr_key)) {
+					
+					if (global_table[h_glb].aggr_key
+					    == aggr_key)
+						goto increment_bucket;
+					
+					h_glb = (h_glb + 1) 
+						& (global_buckets - 1);
 				}
 
-				//TODO: atomic-add count and sum
+				/*TODO: atomic-add count and sum*/
 increment_bucket:
-				__sync_fetch_and_add(&global_table[h_global].count, 1);
-				__sync_fetch_and_add(&global_table[h_global].sum, extra);
-				//printf("===DEBUG=== after incrementation global_table[%u].count = %u\n", (uint32_t)h_global, (uint32_t)global_table[h_global].count);
-				//printf("===DEBUG=== after incrementation global_table[%u].sum = %lu\n", (uint32_t)h_global, (uint64_t)global_table[h_global].sum);
+				__sync_fetch_and_add
+					(&global_table[h_glb].count, 1);
+				__sync_fetch_and_add
+					(&global_table[h_glb].sum, extra);
+				/*
+				printf("===DEBUG=== after incrementation global_table[%u].count = %u\n", (uint32_t)h_glb, (uint32_t)global_table[h_glb].count);
+				printf("===DEBUG=== after incrementation global_table[%u].sum = %lu\n", (uint32_t)h_glb, (uint64_t)global_table[h_glb].sum);
+				*/
 				break;
 			}
 			h = (h + 1) & (buckets - 1);
@@ -222,27 +231,23 @@ increment_bucket:
 		}
 	}
 
-	//TODO: create another barrier; wait until all threads finish joining the table
-	//loop though buckets in global table;
 	
 	pthread_barrier_wait(&aggr_barrier);
 	size_t aggr_beg = (global_buckets / threads) * (thread + 0);
 	size_t aggr_end = (global_buckets / threads) * (thread + 1);
 	if (thread + 1 == threads)
-	    aggr_end = global_buckets;
+		aggr_end = global_buckets;
 	
 	for (j = aggr_beg; j != aggr_end; ++j) {
-	    if (global_table[j].aggr_key == 0 && global_table[j].count != 0)
-		printf("===BUG_ON=== fatal mistake! global_table incorrectly intilized!\n");
-	    if (global_table[j].count > 0 && global_table[j].aggr_key !=0) {
-		sum += global_table[j].sum / global_table[j].count;
-		count++;
+		if ((global_table[j].count > 0 
+		     && global_table[j].aggr_key) != 0) {
+			sum += global_table[j].sum / global_table[j].count;
+			count++;
 	    }
 	}
-	//TODO: average the aggregate here!
+	
 	info->sum = sum;
 	info->count = count;
-	//printf("debug sum=%d count = %d\n", (int)sum, (int)count);
 	
 	pthread_exit(NULL);
 }
@@ -265,7 +270,7 @@ uint64_t q4112_run(const uint32_t *inner_keys, const uint32_t *inner_vals,
 	assert(table != NULL);
 
 	
-	//TODO: allocate bitmaps multiple version;
+	/*: allocate bitmaps multiple version;*/
 	const int8_t log_partitions = 12;
 	size_t partitions = 1 << log_partitions;
 	uint32_t *bitmaps_multi = (uint32_t *)calloc(threads * partitions, 4);
