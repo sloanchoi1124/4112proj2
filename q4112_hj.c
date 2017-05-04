@@ -6,14 +6,17 @@
 #include <stdio.h>
 
 #define BIG_NUMBER 0x9e3779b1
-pthread_barrier_t inner_table_barrier;
-pthread_barrier_t global_hash_barrier;
 typedef struct {
 	uint32_t aggr_key;
 	uint32_t sum;
 	uint32_t count;
 
 } aggr_bucket_t;
+
+pthread_barrier_t inner_table_barrier;
+pthread_barrier_t global_hash_barrier;
+pthread_barrier_t gloable_table_creation_complete;
+aggr_bucket_t *global_table = NULL;
 
 typedef struct {
 	uint32_t key;
@@ -41,7 +44,21 @@ typedef struct {
 	uint64_t sum;
 	uint32_t count;
 } thread_info_t;
+uint32_t trailing_zero_count(uint32_t num)
+{
+    uint32_t i = num;
+    uint32_t count = 0;
+    while (i != 0) {
+	if ((i & 1) == 1)
+	    return count;
+	else {
+	    count++;
+	    i = i >> 1;
+	}
+    }
+    return count;
 
+}
 void *worker_thread(void *arg)
 {
 	thread_info_t *info = (thread_info_t *)arg;
@@ -110,15 +127,24 @@ void *worker_thread(void *arg)
 	info->bitmaps[thread] = my_bitmap;
 	pthread_barrier_wait(&global_hash_barrier);
 	int estimation = 0;
+	uint32_t merged_bitmap = 0;
+	if (global_table == NULL)
+	    printf("===DEBUG=== this shoud be correct!\n");
+
 	if (thread == 0) {
 	    int i;
 	    for (i = 0; i < threads; ++i)
-		printf("%u\n", info->bitmaps[i]);
-
-	    //TODO: calculate estimation!!!
-	    //allocate space for global hash table!
+		merged_bitmap |= info->bitmaps[i];
+	    estimation = (((size_t) 1) << trailing_zero_count(~merged_bitmap)) / 0.77351;
+	    printf("DEBUG ==== estimation = %d\n", estimation);
+	    global_table = (aggr_bucket_t *)calloc(estimation, sizeof(aggr_bucket_t));
 	}
-
+	
+	//another barrier
+	pthread_barrier_wait(&gloable_table_creation_complete);
+	printf("===DEBUG=== global hash table created!\n");
+	if (global_table == NULL)
+	    printf("===FATAL\n");
 	//set another barrier here!
 	//do hash join here
 
@@ -173,6 +199,7 @@ uint64_t q4112_run(const uint32_t *inner_keys, const uint32_t *inner_vals,
 
 	pthread_barrier_init(&inner_table_barrier, NULL, threads);
 	pthread_barrier_init(&global_hash_barrier, NULL, threads);
+	pthread_barrier_init(&gloable_table_creation_complete, NULL, threads);
 	//TODO: maybe initiate more barriers;
 	
 	/*create worker threads;*/
