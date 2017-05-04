@@ -21,6 +21,8 @@ pthread_barrier_t aggr_barrier;
 aggr_bucket_t *global_table = NULL;
 int8_t log_global_buckets = 0;
 size_t global_buckets = 0;
+int8_t log_local_buckets = 10;
+size_t local_buckets = 1024;
 
 typedef struct {
 	uint32_t key;
@@ -80,8 +82,30 @@ int8_t log_two(size_t input)
 	}
 	return result;
 }
+void update_global_table(uint32_t global_aggr_key, uint32_t count_delta, uint64_t sum_delta) {
+    uint32_t h_glb = (uint32_t) (global_aggr_key * BIG_NUMBER);
+    h_glb >>= 32 - log_global_buckets;
+    if (global_table[h_glb].aggr_key == global_aggr_key)
+	goto increment_bucket;
+    
+    while (!__sync_bool_compare_and_swap(&global_table[h_glb].aggr_key, 0, global_aggr_key)) {
+	if (global_table[h_glb].aggr_key == global_aggr_key)
+	    goto increment_bucket;
+	
+	h_glb = (h_glb + 1) & (global_buckets - 1);
+    }
+
+increment_bucket:
+    __sync_fetch_and_add
+	(&global_table[h_glb].count, count_delta);
+    __sync_fetch_and_add
+	(&global_table[h_glb].sum, sum_delta);
+			
+}
+
 void *worker_thread(void *arg)
 {
+    	int local_cache_enabled = 1;
 	thread_info_t *info = (thread_info_t *)arg;
 	assert(pthread_equal(pthread_self(), info->id));
 
@@ -108,7 +132,7 @@ void *worker_thread(void *arg)
 		inner_end = inner_tuples;
 
 	/*build hash table*/
-	size_t i, h, h_glb;
+	size_t i, h;
 	for (i = inner_beg; i != inner_end; ++i) {
 		uint32_t key = inner_keys[i];
 		uint32_t val = inner_vals[i];
@@ -165,12 +189,10 @@ void *worker_thread(void *arg)
 		global_table = (aggr_bucket_t *)
 			calloc(global_buckets, sizeof(aggr_bucket_t));
 
-		/*
-		 * DEBUG INFO
-		 * printf("DEBUG ==== estimation_with_partition = %d\n", estimation); 
-		 * printf("====DEBUG =====global_buckets %d\n", (int)global_buckets);
-		 * printf("====DEBUG======log_global_buckets %d\n", (int)log_global_buckets);
-		*/
+		
+		//printf("DEBUG ==== estimation_with_partition = %d\n", estimation); 
+		//printf("====DEBUG =====global_buckets %d\n", (int)global_buckets);
+		//printf("====DEBUG======log_global_buckets %d\n", (int)log_global_buckets);
 		for (i = 0; i < global_buckets; ++i) {
 			global_table[i].aggr_key = 0;
 			global_table[i].sum = 0;
@@ -179,6 +201,26 @@ void *worker_thread(void *arg)
 	}
 
 	/*join and aggregation*/
+	//TODO: come up with a policy; compare global buckets and the number of outer tuples
+	
+	//TODO: check if local_cache_enabled is true
+	aggr_bucket_t *local_table = NULL;
+
+	if (local_cache_enabled) {
+	    	//TODO: build a local hash table;
+		//calculate the number of local hash buckets;
+		//L1 cache = 32K; each bucket = 16 Byte
+		//as for now, assign 2^10 buckets;
+		local_table = (aggr_bucket_t *) calloc(local_buckets,  sizeof(aggr_bucket_t));
+		assert(local_table != NULL);
+		int i;
+		for (i = 0; i < local_buckets; ++i) {
+			local_table[i].aggr_key = 0;
+			local_table[i].sum = 0;
+			local_table[i].count = 0;
+		}
+	}
+
 	pthread_barrier_wait(&global_table_creation);
 	size_t o = 0;
 	uint32_t count = 0;
@@ -194,41 +236,46 @@ void *worker_thread(void *arg)
 				uint64_t extra =
 					table[h].val * (uint64_t)outer_vals[o];	
 				uint32_t aggr_key = outer_aggr_keys[o];
-				h_glb = (uint32_t) (aggr_key * BIG_NUMBER);
-				h_glb >>= 32 - log_global_buckets;
-
-				if (global_table[h_glb].aggr_key == aggr_key)
-					goto increment_bucket;
-
-
-				while (!__sync_bool_compare_and_swap
-				       (&global_table[h_glb].aggr_key, 
-					0, 
-					aggr_key)) {
+				
+				if (!local_cache_enabled) {
+				    update_global_table(aggr_key, 1, extra);
+				    break;
+				}
+				else {
+				    //TODO: keep things simple here; 
+				    uint32_t h_local = (uint32_t) (aggr_key * BIG_NUMBER);
+				    h_local >>= 32 - log_local_buckets;
+				    if (local_table[h_local].aggr_key == aggr_key) {
+					local_table[h_local].count++;
+					local_table[h_local].sum += extra;
+					break;
+				    }
+				    //flush content in the bucket to global hash tab;e
+				    if (local_table[h_local].aggr_key != 0)
+					update_global_table(
+						local_table[h_local].aggr_key, 
+						local_table[h_local].count, 
+						local_table[h_local].sum);
 					
-					if (global_table[h_glb].aggr_key
-					    == aggr_key)
-						goto increment_bucket;
-					
-					h_glb = (h_glb + 1) 
-						& (global_buckets - 1);
+				    local_table[h_local].aggr_key = aggr_key;
+				    local_table[h_local].count = 1;
+				    local_table[h_local].sum = extra;
+				    break;
 				}
 
-				/*TODO: atomic-add count and sum*/
-increment_bucket:
-				__sync_fetch_and_add
-					(&global_table[h_glb].count, 1);
-				__sync_fetch_and_add
-					(&global_table[h_glb].sum, extra);
-				/*
-				printf("===DEBUG=== after incrementation global_table[%u].count = %u\n", (uint32_t)h_glb, (uint32_t)global_table[h_glb].count);
-				printf("===DEBUG=== after incrementation global_table[%u].sum = %lu\n", (uint32_t)h_glb, (uint64_t)global_table[h_glb].sum);
-				*/
-				break;
 			}
 			h = (h + 1) & (buckets - 1);
 			tab = table[h].key;
 		}
+	}
+
+	//TODO: flush everything to global hash table
+	if (local_cache_enabled) {
+	    for (i = 0; i < local_buckets; ++i) {
+		if (local_table[i].aggr_key != 0)
+		    update_global_table(local_table[i].aggr_key, local_table[i].count, local_table[i].sum);
+	    }
+	    free(local_table);
 	}
 
 	
@@ -315,9 +362,9 @@ uint64_t q4112_run(const uint32_t *inner_keys, const uint32_t *inner_vals,
 		count += info[t].count;
 	}
 	free(global_table);
-	free(bitmaps_multi);
 	free(info);
 	free(table);
+	free(bitmaps_multi);
 	return sum / count;
 
 }
