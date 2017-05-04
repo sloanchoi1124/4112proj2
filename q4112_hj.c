@@ -160,12 +160,12 @@ void *worker_thread(void *arg)
 	    global_buckets = estimation / 0.67;
 	    log_global_buckets = log_two(global_buckets) + 1;
 	    global_buckets = 1 << log_global_buckets;
-	    printf("DEBUG ==== estimation_with_partition = %d\n", estimation); 
+	    //printf("DEBUG ==== estimation_with_partition = %d\n", estimation); 
 	    global_table = (aggr_bucket_t *) calloc(global_buckets, sizeof(aggr_bucket_t));
 	    
 	    //debug only
-	    printf("====DEBUG =====global_buckets %d\n", (int)global_buckets);
-	    printf("====DEBUG======log_global_buckets %d\n", (int)log_global_buckets);
+	    //printf("====DEBUG =====global_buckets %d\n", (int)global_buckets);
+	    //printf("====DEBUG======log_global_buckets %d\n", (int)log_global_buckets);
 	    
 	    for (i = 0; i < global_buckets; ++i) {
 		global_table[i].aggr_key = 0;

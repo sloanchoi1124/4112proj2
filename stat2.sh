@@ -1,0 +1,7 @@
+#!/bin/bash
+FILENAME=result_today.txt
+
+echo "START CONFIG 1" >> $FILENAME
+./q4112_hj 100 1.0 99999 1000000000 1.0 99999 100 0 0.0 16 >> $FILENAME 2>&1
+
+echo "END OF CONFIG1" >> $FILENAME
